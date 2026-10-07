@@ -101,4 +101,86 @@ describe('RuleWorkspaceViewModel', () => {
     expect(workspace.getSnapshot().project?.fields).toHaveLength(3);
     workspace.dispose();
   });
+
+  it('undoes recent edits and restores validation, sample evaluation, and check results', async () => {
+    const repository = new MemoryRepository();
+    const checker = new FakeChecker();
+    const workspace = new RuleWorkspaceViewModel(repository, checker);
+    await workspace.start();
+    await vi.advanceTimersByTimeAsync(50);
+    expect(workspace.getSnapshot().canUndo).toBe(false);
+    const before = workspace.getSnapshot().project as RuleProject;
+    const evaluationBefore = workspace.getSnapshot().sampleEvaluation;
+
+    // priority adjustment is undoable
+    const rule = before.rules[0];
+    workspace.commitProject({ ...before, rules: before.rules.map((item) => item.id === rule.id ? { ...item, priority: 999 } : item) }, '优先级已更新', { undoKey: `rule:${rule.id}:priority` });
+    expect(workspace.getSnapshot().canUndo).toBe(true);
+    workspace.undo();
+    expect(workspace.getSnapshot().project?.rules[0].priority).toBe(rule.priority);
+
+    // sample input edits are undoable and the evaluation returns to the prior state
+    const current = workspace.getSnapshot().project as RuleProject;
+    workspace.commitProject({ ...current, sampleInputs: { ...current.sampleInputs, 'member-level': '普通会员', 'coupon-active': false } }, '样例已更新', { recheck: false, undoKey: 'sample:member-level' });
+    expect(workspace.getSnapshot().sampleEvaluation?.winner?.id).not.toBe(evaluationBefore?.winner?.id);
+    workspace.undo();
+    expect(workspace.getSnapshot().project?.sampleInputs).toEqual(before.sampleInputs);
+    expect(workspace.getSnapshot().sampleEvaluation?.winner?.id).toBe(evaluationBefore?.winner?.id);
+
+    // invalid field edits surface validation issues; undo clears them and reschedules the check
+    const valid = workspace.getSnapshot().project as RuleProject;
+    workspace.commitProject({ ...valid, fields: valid.fields.map((field) => field.id === 'cart-total' ? { ...field, min: 10, max: 0 } : field) });
+    expect(workspace.getSnapshot().phase).toBe('validating');
+    workspace.undo();
+    expect(workspace.getSnapshot().validationIssues).toHaveLength(0);
+    expect(workspace.getSnapshot().checkStatus).toBe('scheduled');
+    await vi.advanceTimersByTimeAsync(200);
+    expect(workspace.getSnapshot().checkStatus).toBe('success');
+    expect(workspace.getSnapshot().analysis).not.toBeNull();
+    workspace.dispose();
+  });
+
+  it('coalesces rapid same-target edits into a single undo step', async () => {
+    const workspace = new RuleWorkspaceViewModel(new MemoryRepository(), new FakeChecker());
+    await workspace.start();
+    const before = workspace.getSnapshot().project as RuleProject;
+    workspace.commitProject({ ...before, title: '策略' }, '编辑', { recheck: false, undoKey: 'project:title' });
+    workspace.commitProject({ ...workspace.getSnapshot().project as RuleProject, title: '策略草稿' }, '编辑', { recheck: false, undoKey: 'project:title' });
+    workspace.undo();
+    expect(workspace.getSnapshot().project?.title).toBe(before.title);
+    expect(workspace.getSnapshot().canUndo).toBe(false);
+    workspace.undo();
+    expect(workspace.getSnapshot().project?.title).toBe(before.title);
+    workspace.dispose();
+  });
+
+  it('does not undo across freeze, restore, or project switch boundaries', async () => {
+    const workspace = new RuleWorkspaceViewModel(new MemoryRepository(), new FakeChecker());
+    await workspace.start();
+    const before = workspace.getSnapshot().project as RuleProject;
+    workspace.commitProject({ ...before, title: '冻结前修改' }, '编辑', { recheck: false });
+    expect(workspace.getSnapshot().canUndo).toBe(true);
+
+    workspace.freezeCurrent();
+    expect(workspace.getSnapshot().canUndo).toBe(false);
+    workspace.undo();
+    expect(workspace.getSnapshot().project?.title).toBe('冻结前修改');
+
+    const frozenVersionId = workspace.getSnapshot().project?.frozenVersionId ?? '';
+    workspace.restoreVersion(frozenVersionId);
+    workspace.commitProject({ ...workspace.getSnapshot().project as RuleProject, title: '恢复后修改' }, '编辑', { recheck: false });
+    workspace.restoreVersion(frozenVersionId);
+    expect(workspace.getSnapshot().canUndo).toBe(false);
+    workspace.undo();
+    expect(workspace.getSnapshot().project?.title).toBe('恢复后修改');
+
+    workspace.commitProject({ ...workspace.getSnapshot().project as RuleProject, title: '切换前修改' }, '编辑', { recheck: false });
+    workspace.createProject();
+    expect(workspace.getSnapshot().canUndo).toBe(false);
+    workspace.switchProject(before.id);
+    expect(workspace.getSnapshot().canUndo).toBe(false);
+    workspace.undo();
+    expect(workspace.getSnapshot().project?.title).toBe('切换前修改');
+    workspace.dispose();
+  });
 });

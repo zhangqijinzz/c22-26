@@ -25,7 +25,8 @@ export class FieldsViewModel {
     const project = this.workspace.getSnapshot().project;
     if (!project) return;
     const fields = project.fields.map((field) => field.id === fieldId ? { ...field, ...updates } : field);
-    this.workspace.commitProject({ ...project, fields }, '字段已更新，检查结果将自动刷新');
+    const undoKey = `field:${fieldId}:${Object.keys(updates).sort().join('+')}`;
+    this.workspace.commitProject({ ...project, fields }, '字段已更新，检查结果将自动刷新', { undoKey });
   }
 
   removeField(fieldId: string): boolean {

@@ -81,6 +81,9 @@ button:disabled { cursor: not-allowed !important; opacity: .5; }
 .save-dot.is-saving { background: #d8a851; animation: pulse 1s infinite alternate; }
 .save-dot.save-error { background: #d66d62; }
 .topbar-divider { height: 19px; width: 1px; background: #e4ebe8; }
+.undo-button { display: flex; align-items: center; gap: 5px; padding: 4px 11px; border: 1px solid #dce8e1; border-radius: 999px; background: #fff; color: #4f6f63; font: 600 9px Manrope, 'Noto Sans SC', sans-serif; cursor: pointer; }
+.undo-button:not(:disabled):hover { border-color: #b9d4c6; background: #f2f8f4; }
+.undo-button:disabled { opacity: .38; cursor: default; }
 .avatar-button { width: 29px; height: 29px; border: 1px solid #cce1d6; border-radius: 50%; background: #eaf4ed; color: #34745e; font: 700 8px Manrope, sans-serif; cursor: default; }
 .content-wrap { width: min(1150px, 100%); margin: 0 auto; padding: 27px 42px 64px; }
 .project-title-bar { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; padding: 3px 0 18px; border-bottom: 1px solid #e5ebe8; }
