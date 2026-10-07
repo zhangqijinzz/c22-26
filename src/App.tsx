@@ -26,6 +26,18 @@ export default function App() {
     return () => workspace.dispose();
   }, [workspace]);
 
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || event.shiftKey || event.key.toLowerCase() !== 'z') return;
+      const target = event.target as HTMLElement | null;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || target.isContentEditable)) return;
+      event.preventDefault();
+      workspace.undo();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [workspace]);
+
   const openRule = (ruleId: string) => {
     workspace.navigate('rules');
     workspace.selectRule(ruleId);
@@ -44,7 +56,7 @@ export default function App() {
       </aside>
 
       <main className="main-area">
-        <header className="topbar"><div className="breadcrumb"><span>规则项目</span><b>/</b><strong>{activeNavigation.label}</strong></div><div className="topbar-right"><span className="save-indicator"><i className={state.persistence === 'saving' ? 'save-dot is-saving' : state.persistence === 'error' ? 'save-dot save-error' : 'save-dot'} />{state.persistence === 'saving' ? '保存中' : state.persistence === 'error' ? '保存失败' : '已保存'}</span><span className="topbar-divider" /><button className="avatar-button" aria-label="用户菜单">RW</button></div></header>
+        <header className="topbar"><div className="breadcrumb"><span>规则项目</span><b>/</b><strong>{activeNavigation.label}</strong></div><div className="topbar-right"><button className="undo-button" disabled={!state.undoDepth} title={state.undoLabel ? `撤销：${state.undoLabel}` : '没有可撤销的编辑'} onClick={() => workspace.undo()}><span>↶</span>撤销{state.undoDepth > 0 ? ` ${state.undoDepth}` : ''}</button><span className="save-indicator"><i className={state.persistence === 'saving' ? 'save-dot is-saving' : state.persistence === 'error' ? 'save-dot save-error' : 'save-dot'} />{state.persistence === 'saving' ? '保存中' : state.persistence === 'error' ? '保存失败' : '已保存'}</span><span className="topbar-divider" /><button className="avatar-button" aria-label="用户菜单">RW</button></div></header>
         {project && <div className="content-wrap">
           <div className="project-title-bar"><div className="project-title-copy"><span className="project-kicker">RULE PROJECT / LOCAL</span><input aria-label="项目名称" value={project.title} onChange={(event) => workspace.renameProject(event.target.value)} /><span className="project-subtitle">规则逻辑空间 <span>·</span> 最后修改 {new Intl.DateTimeFormat('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).format(project.updatedAt)}</span></div><div className="title-bar-actions"><span className={`phase-badge phase-${state.phase}`}>{state.phase === 'checking' ? '检查中' : state.phase === 'validating' ? '需要修复' : state.phase === 'error' ? '发生错误' : project.frozenVersionId ? '已冻结' : state.phase === 'ready' ? '检查通过' : '编辑中'}</span><button className="title-more-button" aria-label="创建项目" title="新建项目" onClick={() => workspace.createProject()}>＋</button></div></div>
           {state.notice && <div className={`status-message${state.phase === 'error' ? ' status-message-error' : ''}`} role="status"><span>{state.phase === 'error' ? '!' : '↳'}</span>{state.notice}{state.saveError && <small>{state.saveError}</small>}</div>}

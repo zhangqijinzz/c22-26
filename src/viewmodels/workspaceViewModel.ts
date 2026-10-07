@@ -29,7 +29,22 @@ export interface WorkspaceState {
   selectedRuleId?: string;
   notice: string;
   saveError?: string;
+  undoDepth: number;
+  undoLabel: string | null;
 }
+
+type UndoSnapshot = Pick<RuleProject, 'title' | 'fields' | 'rules' | 'sampleInputs'>;
+
+interface UndoEntry {
+  projectId: string;
+  label: string;
+  coalesceKey?: string;
+  recordedAt: number;
+  snapshot: UndoSnapshot;
+}
+
+const MAX_UNDO_ENTRIES = 50;
+const UNDO_COALESCE_WINDOW_MS = 1200;
 
 type Listener = () => void;
 type WorkspaceRepository = Pick<RuleRepository, 'load' | 'save'>;
@@ -40,8 +55,10 @@ export class RuleWorkspaceViewModel implements WorkspacePort {
     phase: 'loading', persistence: 'idle', workspace: null, project: null,
     activeModule: 'inspection', checkStatus: 'idle', analysis: null,
     validationIssues: [], sampleEvaluation: null, notice: '正在恢复本地规则项目…',
+    undoDepth: 0, undoLabel: null,
   };
   private readonly listeners = new Set<Listener>();
+  private readonly undoStack: UndoEntry[] = [];
   private startPromise?: Promise<void>;
   private saveTimer?: ReturnType<typeof setTimeout>;
   private checkTimer?: ReturnType<typeof setTimeout>;
@@ -84,13 +101,43 @@ export class RuleWorkspaceViewModel implements WorkspacePort {
     this.checkOperation = undefined;
   }
 
-  commitProject(project: RuleProject, notice = '项目已更新', options: { recheck?: boolean } = {}): boolean {
+  commitProject(project: RuleProject, notice = '项目已更新', options: { recheck?: boolean; undoKey?: string } = {}): boolean {
     const current = this.state.project;
     if (!current || current.frozenVersionId) {
       this.updateView({ notice: '当前版本已冻结。请先从版本记录中复制一份继续编辑。' });
       return false;
     }
+    this.recordUndo(current, notice, options.undoKey);
     this.replaceProject({ ...project, updatedAt: Date.now() }, notice, options.recheck !== false);
+    return true;
+  }
+
+  undo(): boolean {
+    const project = this.state.project;
+    if (!project) return false;
+    if (project.frozenVersionId) {
+      this.clearUndo();
+      this.updateView({ notice: '当前项目已冻结，冻结前的修改不允许撤销。请先从版本记录中复制一份继续编辑。' });
+      return false;
+    }
+    const entry = this.undoStack.pop();
+    if (!entry) {
+      this.updateView({ notice: '没有可以撤销的编辑。' });
+      return false;
+    }
+    if (entry.projectId !== project.id) {
+      this.clearUndo();
+      this.updateView({ notice: '撤销记录已随项目切换清空。' });
+      return false;
+    }
+    const restored: RuleProject = {
+      ...project,
+      title: entry.snapshot.title,
+      fields: cloneData(entry.snapshot.fields),
+      rules: cloneData(entry.snapshot.rules),
+      sampleInputs: cloneData(entry.snapshot.sampleInputs),
+    };
+    this.replaceProject(restored, `已撤销：${entry.label}`, true);
     return true;
   }
 
@@ -108,7 +155,7 @@ export class RuleWorkspaceViewModel implements WorkspacePort {
 
   renameProject(title: string): void {
     const project = this.state.project;
-    if (project) this.commitProject({ ...project, title }, '项目名称已更新', { recheck: false });
+    if (project) this.commitProject({ ...project, title }, '项目名称已更新', { recheck: false, undoKey: 'project:title' });
   }
 
   async runCheck(): Promise<void> {
@@ -159,6 +206,7 @@ export class RuleWorkspaceViewModel implements WorkspacePort {
     if (!workspace) return;
     const project = createBlankProject(workspace.projects.length + 1);
     const next: WorkspaceDocument = { ...workspace, projects: [...workspace.projects, project], activeProjectId: project.id };
+    this.clearUndo();
     this.publish({ ...this.state, workspace: next, project, phase: 'validating', activeModule: 'fields', analysis: null, checkStatus: 'idle', validationIssues: ruleDomain.validateProject(project), sampleEvaluation: evaluateSample(project, project.sampleInputs), selectedRuleId: undefined, notice: '空项目已创建。先定义字段，再添加规则。' });
     this.scheduleSave(next);
   }
@@ -168,6 +216,7 @@ export class RuleWorkspaceViewModel implements WorkspacePort {
     const project = workspace?.projects.find((candidate) => candidate.id === projectId);
     if (!workspace || !project || workspace.activeProjectId === projectId) return;
     this.cancelCheck();
+    this.clearUndo();
     const next = { ...workspace, activeProjectId: projectId };
     const issues = ruleDomain.validateProject(project);
     this.publish({ ...this.state, workspace: next, project, phase: issues.length ? 'validating' : 'editing', activeModule: 'inspection', checkStatus: issues.length ? 'idle' : 'scheduled', analysis: null, validationIssues: issues, sampleEvaluation: evaluateSample(project, project.sampleInputs), selectedRuleId: project.rules[0]?.id, notice: `已切换到“${project.title}”` });
@@ -186,6 +235,7 @@ export class RuleWorkspaceViewModel implements WorkspacePort {
     const project = this.state.project;
     if (!project || project.frozenVersionId) return;
     const version = createVersionSnapshot(project, `冻结版本 ${project.versions.length + 1}`, true);
+    this.clearUndo();
     this.replaceProject({ ...project, versions: [version, ...project.versions], frozenVersionId: version.id }, `已冻结${version.name}`, false, true);
   }
 
@@ -193,6 +243,7 @@ export class RuleWorkspaceViewModel implements WorkspacePort {
     const project = this.state.project;
     const version = project?.versions.find((candidate) => candidate.id === versionId);
     if (!project || !version) return;
+    this.clearUndo();
     this.replaceProject({ ...project, fields: cloneData(version.fields), rules: cloneData(version.rules), sampleInputs: cloneData(version.sampleInputs), frozenVersionId: undefined }, `已从“${version.name}”建立可编辑版本`, true, true);
     this.navigate('rules');
   }
@@ -209,6 +260,7 @@ export class RuleWorkspaceViewModel implements WorkspacePort {
     };
     const next = { ...workspace, projects: [...workspace.projects, project], activeProjectId: project.id };
     const issues = ruleDomain.validateProject(project);
+    this.clearUndo();
     this.publish({ ...this.state, workspace: next, project, phase: issues.length ? 'validating' : 'editing', activeModule: 'rules', checkStatus: issues.length ? 'idle' : 'scheduled', analysis: null, validationIssues: issues, sampleEvaluation: evaluateSample(project, project.sampleInputs), selectedRuleId: project.rules[0]?.id, notice: `已复制版本到项目“${project.title}”` });
     this.scheduleSave(next);
     if (!issues.length) this.scheduleCheck(80);
@@ -293,8 +345,35 @@ export class RuleWorkspaceViewModel implements WorkspacePort {
     });
   }
 
+  private recordUndo(project: RuleProject, label: string, coalesceKey?: string): void {
+    const now = Date.now();
+    const top = this.undoStack[this.undoStack.length - 1];
+    if (top && top.projectId === project.id && coalesceKey && top.coalesceKey === coalesceKey && now - top.recordedAt <= UNDO_COALESCE_WINDOW_MS) {
+      top.recordedAt = now;
+      return;
+    }
+    this.undoStack.push({
+      projectId: project.id,
+      label,
+      coalesceKey,
+      recordedAt: now,
+      snapshot: {
+        title: project.title,
+        fields: cloneData(project.fields),
+        rules: cloneData(project.rules),
+        sampleInputs: cloneData(project.sampleInputs),
+      },
+    });
+    if (this.undoStack.length > MAX_UNDO_ENTRIES) this.undoStack.shift();
+  }
+
+  private clearUndo(): void {
+    this.undoStack.length = 0;
+  }
+
   private publish(state: WorkspaceState): void {
-    this.state = state;
+    const top = this.undoStack[this.undoStack.length - 1];
+    this.state = { ...state, undoDepth: this.undoStack.length, undoLabel: top?.label ?? null };
     this.listeners.forEach((listener) => listener());
   }
 }

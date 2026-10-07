@@ -9,7 +9,7 @@ export class SamplesViewModel {
     const project = this.currentProject();
     if (!project) return;
     const sampleInputs: SampleInput = { ...project.sampleInputs, [fieldId]: value };
-    this.workspace.commitProject({ ...project, sampleInputs }, '样例已更新', { recheck: false });
+    this.workspace.commitProject({ ...project, sampleInputs }, '样例已更新', { recheck: false, undoKey: `sample:${fieldId}` });
   }
 
   evaluate(): void {

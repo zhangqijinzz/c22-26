@@ -20,7 +20,11 @@ export class RulesViewModel {
   }
 
   updateRule(ruleId: string, updates: Partial<Pick<BusinessRule, 'name' | 'priority' | 'result'>>): void {
-    this.updateRules((rule) => rule.id === ruleId ? { ...rule, ...updates } : rule, `${this.findName(ruleId)}已更新`);
+    this.updateRules(
+      (rule) => rule.id === ruleId ? { ...rule, ...updates } : rule,
+      `${this.findName(ruleId)}已更新`,
+      `rule:${ruleId}:${Object.keys(updates).sort().join('+')}`,
+    );
   }
 
   removeRule(ruleId: string): void {
@@ -53,7 +57,7 @@ export class RulesViewModel {
       const conditions = [...rule.conditions.conditions];
       conditions[index] = condition;
       return { ...rule, conditions: { ...rule.conditions, conditions } };
-    }, '规则条件已更新');
+    }, '规则条件已更新', `rule:${ruleId}:condition:${index}`);
   }
 
   changeConditionField(ruleId: string, index: number, fieldId: string): void {
@@ -75,9 +79,9 @@ export class RulesViewModel {
     return this.currentProject()?.rules.find((rule) => rule.id === ruleId)?.name ?? '规则';
   }
 
-  private updateRules(update: (rule: BusinessRule) => BusinessRule, notice: string): void {
+  private updateRules(update: (rule: BusinessRule) => BusinessRule, notice: string, undoKey?: string): void {
     const project = this.currentProject();
-    if (project) this.workspace.commitProject({ ...project, rules: project.rules.map(update) }, notice);
+    if (project) this.workspace.commitProject({ ...project, rules: project.rules.map(update) }, notice, undoKey ? { undoKey } : undefined);
   }
 }
 

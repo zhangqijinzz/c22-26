@@ -34,4 +34,17 @@ describe('feature ViewModels', () => {
     expect(workspace.getSnapshot().sampleEvaluation?.valid).toBe(true);
     workspace.dispose();
   });
+
+  it('coalesces rapid sample edits into one undo step and restores the previous value', async () => {
+    const workspace = new RuleWorkspaceViewModel(new MemoryRepository(), new FakeChecker());
+    await workspace.start();
+    const samples = new SamplesViewModel(workspace);
+    samples.setValue('cart-total', 100);
+    samples.setValue('cart-total', 200);
+    expect(workspace.getSnapshot().undoDepth).toBe(1);
+    expect(workspace.undo()).toBe(true);
+    expect(workspace.getSnapshot().project?.sampleInputs['cart-total']).toBe(1200);
+    expect(workspace.getSnapshot().undoDepth).toBe(0);
+    workspace.dispose();
+  });
 });
